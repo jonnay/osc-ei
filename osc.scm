@@ -11,14 +11,18 @@
    osc-send
    osc-close
    osc-listen
+   register-listener
    )
 
   (import chicken scheme)
-  (use udp6 socket s48-modules srfi-18)
+  (use udp6 socket s48-modules srfi-18 srfi-69)
 
   (include-relative "encode.scm")
   (include-relative "decode.scm")
 
+
+  ; main listener table
+  (define listener-table (make-hash-table))
 
   (define (osc-connect port)
     (let ((socket (udp-open-socket)))
@@ -53,6 +57,30 @@
       (print "Closing socket...")))
 
 
+  (define (make-register-listener-fn table)
+    (lambda (pattern fn)
+      (hash-table-set! table pattern fn)))
+
+  (define register-listener (make-register-listener-fn listener-table))
+
+  (define (do-evaluate-listener input table)
+    (let* ((pattern (car input))
+           (args (cdr input))
+           (fn  (lambda (pattern)
+                  (if (hash-table-exists? table pattern)
+                    (hash-table-ref table pattern)
+                    '()))))
+      (if (not (null? (fn pattern)))
+          (if (procedure? (fn pattern))
+              (apply (fn pattern) args)
+              ((eval (fn pattern)) args)))))
+
+  (define (make-evaluate-listener-fn table)
+    (lambda (input)
+        (do-evaluate-listener input table)))
+
+  (define evaluate-listener (make-evaluate-listener-fn listener-table))
+
   (define (osc-listen socket)
     (thread-start!
       (lambda ()
@@ -60,6 +88,7 @@
          (if (socket-receive-ready? socket)
              (let* ((received (udp-recv socket 1024))
                     (decoded (decode-packet (map char->integer (string->list received)))))
+               (evaluate-listener decoded))
                (print decoded)
              (thread-sleep! 0.05))
          (loop)))))
